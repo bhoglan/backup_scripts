@@ -30,14 +30,11 @@ tar -czf $tar_filename $data_directory
 # the passphrase will be read from stdin. 
 cat /root/bwpasswd | gpg --batch --yes --passphrase-fd 0 --symmetric $tar_filename
 
-#Clean up our dirty work
-rm $tar_filename
-
 #Ship the file off to the Google drive
 rclone copy $tar_filename.gpg "GDrive:/"
 
-#Clean up the cloned file
-rm $tar_filename.gpg
+#Clean up the tarball and the cloned file
+rm $tar_filename*
 
 #Write a log message of the success
 logger "$date BW DB backed up to Google Drive successfully!"
