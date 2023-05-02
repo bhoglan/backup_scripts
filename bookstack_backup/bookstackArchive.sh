@@ -1,129 +1,77 @@
 #!/bin/bash
+
 ###############################################
 #Author: Brian Hoglan                         #
 #Email: bhoglan@gmail.com                     #
-#Created Date: 2022/09/12                     #
+#Created Date: 2022/12/09                     #
 #Updated:                                     #
 #Version: 1.0                                 #
 ###############################################
 # v 1.0 - Initial script creation.
 
 ###############################################
-# This script is the second step in backing up#
-# Bookstack. First two separate scripts run   #
-# within the Bookstack and DB containers to   #
-# tar files and dump the DB, respectively.    #
-# This script runs on a cron job 5 minutes    #
-# later to compress and encrypt the files     #
-# before sending them to Google Drive.	      #
-# Finish it off by cleaning up the files.     #
+# This script will backup the Bookstack app   #
+# user files and environment config. Tasks to #
+# complete:                                   #
+# 1. Exec mariadb dump in the bookstack_db    #
+# container to a shared location.             #
+# 2. Gather and tar up some directories in the#
+# Bookstack app container and place them in a #
+# shared location.                            #
+# 3. Tar and GZ the archive files we just made#
+# 4. Encrypt the gz file with GPG.            #
+# 5. Use rclone to ship the encrypted archive #
+# to Wasabi.                                  #
+# 6. Clean up temp files.                     #
 ###############################################
 
-#Reference: https://www.bookstackapp.com/docs/admin/backup-restore/
-
-#crontab entries
-#0 0 * * * /home/bhoglan/docker/shared/bookstackArchive.sh
-#0 12 * * * /home/bhoglan/docker/shared/bookstackArchive.sh
-
-# Exit when any command fails
-set -e
-
-# Keep track of the last executed command
-trap 'last_command=$current_command; current_command=$BASH_COMMAND' DEBUG
-# Echo an error message before exiting
-trap 'echo -e ${date} "\xE2\x9D\x8C" "\xE2\x9D\x8C" "\"${last_command}\" command failed with exit code $?." "\xE2\x9D\x8C""\xE2\x9D\x8C" >> ${dockerDir}/shared/archive.log' EXIT
-
-# Declare conditional logging and exit
-function success()
-{
-	echo -e ${date} '$? ran successfully!'
-}
-
-function fail()
-{
-	echo -e ${date} "\xF0\x9F\x92\x80" '$? failed...' "\xF0\x9F\x92\x80"
-}
-
-# Declare exit cleanup function
-function cleanup()
-{
-	# Let's delete some temp files
-	rm ${dockerDir}${bookstack}*bookstackFiles.tar
-	rm ${dockerDir}${bookstack_db}*bookstack_db.sql
-	rm ${dockerDir}/shared/${archiveTar}
-	rm ${dockerDir}/shared/${archiveGPG}
-
-	# Oh yeah, just like that. Mmmkay, let's add a quick message to the log
-	echo -e 'Bookstack file archive, Bookstack DB, temp bz2, and temp gpg files all deleted'
-}
-
-#Set variables
+# Set some variables
 date=$(date +"%y%m%d-%H%M")
-dockerDir="/home/bhoglan/docker"
-bookstack="/appdata/bookstack/archive/"
-bookstack_db="/appdata/mariadb/archive/"
-archiveTar=${date}"-bookstackArchive.tar.bz2"
-archiveGPG=${archiveTar}".gpg"
+bookstackDir="/home/bhoglan/docker/appdata/bookstack/"
+dbDir="/home/bhoglan/docker/appdata/mariadb/"
+bookstackArchive=${date}"bookstackArchive.tar"
+bookstackDB=${date}"bookstackDB.sql"
+backupGZ=${date}"bookstackGZ.tar.gz"
+#bookstack_db_container=$(/usr/bin/docker ps | grep bookstack_db | awk '{print $1}')
+#bookstack_app_container=$(/usr/bin/docker ps | grep lscr.io/linuxserver/bookstack | awk '{print $1}')
+bookstack_db_container=$(/usr/bin/docker ps --format "{{.ID}}" --filter "name=bookstack_db")
+bookstack_app_container=$(/usr/bin/docker ps --format "{{.ID}}" --filter "ancestor=lscr.io/linuxserver/bookstack")
+appRoot="/app/www/"
+dockerDir="/home/bhoglan/docker/"
 
-#Divider to make it a little more readable
-echo -e "\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88" >> ${dockerDir}/shared/archive.log
+#Declare some functions
+function dbdump()
+{
+    # docker exec "${bookstack_db_container}" mysqldump --defaults-file=/root/.secrets/bookstackCreds.cnf --all-databases > /archive/"${bookstackDB}"
+    docker exec "${bookstack_db_container}" /bin/sh /archive/dbbackup.sh
+}
 
-#Tar 'em up
-tar --create --bzip2 --file ${dockerDir}/shared/${archiveTar}  ${dockerDir}${bookstack}*bookstackFiles.tar ${dockerDir}${bookstack_db}*bookstack_db.sql
-if [ $? -eq 0 ]; then
-	success()
-else
-	fail()
-	if [[ -e ${dockerDir}${bookstack}*bookstackFiles.tar || ${dockerDir}${bookstack_db}*bookstack_db.sql ]]
-	then
-		rm ${dockerDir}${bookstack}*bookstackFiles.tar
-		rm ${dockerDir}${bookstack}*bookstack_db.sql
-		EXIT
-	fi
-fi
+function archive()
+{
+    docker exec "${bookstack_app_container}" tar --create --file /archive/"${bookstackArchive}" ${appRoot}"public/" ${appRoot}".env" ${appRoot}"storage/"
+}
 
+# Dump the mariadb to a shared directory
+dbdump
+archive
 
-#Write message 1
-echo -e "\xE2\x9C\x85" ${date} "\\ Bookstack files tarred and bzipped successfully!" ${archiveTar} "\xE2\x9C\x85" >> ${dockerDir}/shared/archive.log
+# Let the script take a nap in case it takes some time to generate the files
+sleep 30
 
-#GPG - Encryption time!
-cat /home/bhoglan/.secrets/bookstackArchive.ini | gpg --batch --yes --cipher-algo aes256 --passphrase-fd 0 --symmetric $archiveTar
-if [ $? -eq 0 ]; then
-        success()
-else
-        fail()
-        if [[ -e ${dockerDir}/shared/${archiveTar} || ${dockerDir}/shared/${archiveGPG} ]]
-        then
-                rm ${dockerDir}/shared/${archiveTar}
-		rm ${dockerDir}/shared/${archiveGPG}
-		EXIT
-        fi
-fi
+# Tar and GZ the collected files
+tar --create --bzip2 --file "${dockerDir}""shared/archive/""${backupGZ}" "${bookstackDir}""archive/""${bookstackArchive}" "${dbDir}""archive/""${bookstackDB}"
 
-#Write message 2
-echo -e "\xE2\x9C\x85" ${date} "\\ Bookstack files encrypted successfully!" ${archiveGPG} "\xE2\x9C\x85" >> ${dockerDir}/shared/archive.log
+# Encrypt the archive
+gpg --batch --yes --cipher-algo aes256 --passphrase-fd 0 --symmetric "${dockerDir}"shared/archive/"${backupGZ}" < /root/.secrets/bookstackArchive
 
-#Ship it on off to Google Drive
-rclone --config="/home/bhoglan/.config/rclone/rclone.conf" --log-file=${dockerDir}/shared/archive.log -v copy ${dockerDir}/shared/${archiveGPG} "Google Drive:/Bookstack_Backup"
-if [ $? -eq 0 ]; then
-        success()
-else
-        fail()
-        if [[ -e ${dockerDir}/shared/${archiveGPG} ]]
-        then
-                rm ${dockerDir}/shared/${archiveGPG}
-		EXIT
-        fi
-fi
+# Ship it out to Wasabi
+rclone --config="/root/.config/rclone/rclone.conf" --log-file=${dockerDir}"shared/archive/rclone.log" -v copy "${dockerDir}""shared/archive/""${backupGZ}"".gpg" "Wasabi:/bookstackbackup"
 
-#Write a nice little log note
-echo -e "\xE2\x9C\x85" ${date} "\\ Bookstack files sent to Google Drive successfully!" ${archiveGPG} "\xE2\x9C\x85" >> ${dockerDir}/shared/archive.log
+#Write a log entry
+echo -e "\xE2\x9C\x85" ${date} "\\\ Bookstack DB backed up successfully!" "${backupGZ}"".gpg" "\xE2\x9C\x85" >> "${dockerDir}""/shared/archive/bookstackArchive.log"
 
-#Divider to make it a little more readable
-echo -e "\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88""\xF0\x9F\x90\x88" >> ${dockerDir}/shared/archive.log
-
-#Run the cleanup() function to tidy up the temp files
-if [ $? -eq 0 ]; then
-	cleanup()
-else
-	echo -e "Dude, something's wrong but I don't know what"
+# Clean up
+rm "${dockerDir}""shared/archive/""${backupGZ}"
+rm "${dockerDir}""shared/archive/""${backupGZ}"".gpg"
+rm "${bookstackDir}""archive/""${bookstackArchive}"
+rm "${dbDir}""archive/""${bookstackDB}"
